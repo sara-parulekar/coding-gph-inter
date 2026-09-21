@@ -82,8 +82,7 @@ float random (in vec2 _st) {
 float noise (in vec2 _st) {
     vec2 i = floor(_st);
     vec2 f = fract(_st);
-
-    // Four corners in 2D of a tile
+    
     float a = random(i);
     float b = random(i + vec2(0.600,0.480));
     float c = random(i + vec2(0.590,0.020));
@@ -125,9 +124,8 @@ void main() {
     
     vec2 normMouse = u_mouse / u_resolution;
 
-    //warped field based on mouse position
     vec2 mousePos = normMouse;
-    mousePos.x *= u_resolution.x/u_resolution.y;  // match st's aspect correction
+    mousePos.x *= u_resolution.x/u_resolution.y;
 
     vec2 toMouse = mousePos - st;
     float mouseDist = length(toMouse);
