@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>
+  <title>week 3 video</title>
+</head>
+<body>
+<script>
+  let video;
+  let drawing = true;
+
+  const symmetry = 6;
+  const angle = 360 / symmetry;
+
+  function setup() {
+    createCanvas(windowWidth, windowHeight);
+    angleMode(DEGREES);
+    imageMode(CENTER);
+    background(0);
+
+    video = createCapture(VIDEO);
+    video.size(640, 480);
+    video.hide();
+  }
+
+  //using https://p5js.org/examples/Repetition-Kaleidoscope/ effect to generate this
+  function draw() {
+    translate(width / 2, height / 2);
+
+    let mx = mouseX - width / 2;
+    let my = mouseY - height / 2;
+
+    if (drawing && mouseX > 0 && mouseX < width && mouseY > 0 && mouseY < height) {
+      for (let i = 0; i < symmetry; i++) {
+        rotate(angle);
+        image(video, mx, my, 32, 24);
+
+        push();
+        scale(1, -1);
+        image(video, mx, my, 32, 24);
+        pop();
+      }
+    }
+  }
+
+  function keyPressed() {
+    if (key === 'c' || key === 'C') {
+      background(0);
+    }
+
+    if (key === 's' || key === 'S') {
+      saveCanvas('video-kaleidoscope', 'png');
+    }
+  }
+
+  function mouseClicked() {
+    drawing = !drawing;
+  }
+</script>
+</body>
+</html>
