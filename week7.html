@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redemption — a tale of the Nine Realms</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{
+  background:var(--bg);color:var(--fg);
+  font-family:'VT323',ui-monospace,Menlo,monospace;font-size:22px;line-height:1.15;
+  display:flex;justify-content:center;
+  transition:background-color 1.4s ease,color 1.4s ease;
+}
+body.hel{--bg:#04050a;--fg:#c3cada;--dim:#465069;--accent:#7a94ff;--hi:#eef1f8;--life:#7a94ff}
+body.mid{--bg:#040905;--fg:#cfe6c4;--dim:#3d6a45;--accent:#ff7eb6;--hi:#f2d35a;--life:#5fd072}
+body.asg{--bg:#f6f4ef;--fg:#3b3831;--dim:#a8a191;--accent:#b48a2c;--hi:#1d1b17;--life:#b48a2c}
+
+#app{width:min(1200px,100%);padding:12px 16px 16px;display:flex;flex-direction:column;gap:6px}
+#status{display:flex;justify-content:space-between;align-items:baseline;gap:18px;white-space:nowrap;overflow:hidden}
+#status .k{color:var(--dim)}
+#status b{font-weight:normal;color:var(--accent)}
+#realm{color:var(--hi);letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis}
+#life b{color:var(--life);letter-spacing:.02em}
+#life.hit b{color:var(--hi)}
+
+#stage{position:relative;align-self:center;line-height:0}
+#cv{display:block;cursor:crosshair;touch-action:manipulation}
+#stage::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:
+    repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.22) 2px 3px),
+    radial-gradient(ellipse at center,rgba(0,0,0,0) 60%,rgba(0,0,0,.45) 100%);
+}
+body.asg #stage::after{opacity:.18}
+#hint{height:1.1em;font-size:19px;color:var(--dim);display:flex;justify-content:space-between}
+#hint span:last-child{color:var(--accent)}
+
+#console{display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--dim);padding-top:8px}
+#log{height:clamp(110px,22vh,230px);overflow-y:auto;padding-right:8px;scrollbar-width:thin;scrollbar-color:var(--dim) transparent;cursor:default}
+#log p{margin:0 0 .4em;max-width:76ch}
+#log p.old{opacity:.42}
+#log p.room{color:var(--hi);letter-spacing:.1em;text-transform:uppercase;margin-top:.7em}
+#log p.sys{color:var(--dim)}
+#log p.you{color:var(--accent);opacity:.8}
+#log p.alert{color:var(--hi)}
+#log p.big{color:var(--accent);font-size:1.3em;letter-spacing:.04em}
+#choices{display:flex;flex-wrap:wrap;gap:2px 16px;min-height:1.3em}
+#choices button{font:inherit;background:none;border:0;color:var(--accent);cursor:pointer;padding:0 3px}
+#choices button:hover,#choices button:focus-visible{background:var(--accent);color:var(--bg);outline:none}
+#cmd{display:flex;gap:8px;align-items:center}
+#cmd label{color:var(--accent)}
+#in{flex:1;font:inherit;background:transparent;border:0;outline:0;color:var(--hi);caret-color:var(--accent)}
+#in::placeholder{color:var(--dim);opacity:.8}
+#keys{font-size:18px;color:var(--dim)}
+</style>
+</head>
+<body class="hel">
+<div id="app">
+  <header id="status">
+    <span id="inv"></span>
+    <span id="realm"></span>
+    <span id="life"></span>
+  </header>
+  <div id="stage"><canvas id="cv" aria-label="Game scene"></canvas></div>
+  <div id="hint"><span id="keys">&larr; &rarr; walk &middot; &uarr; &darr; climb &middot; click to move, take and strike &middot; space strikes</span><span id="hover"></span></div>
+  <section id="console">
+    <div id="log" aria-live="polite"></div>
+    <div id="choices"></div>
+    <form id="cmd" autocomplete="off"><label for="in">&gt;</label><input id="in" spellcheck="false" placeholder="type a command, or click a [choice]"></form>
+  </section>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ================================================================
+   GRID + PALETTES
+   ================================================================ */
+const COLS = 112, ROWS = 28, F = 21;           // F = feet row on flat ground
+const FONT = "'VT323', ui-monospace, Menlo, monospace";
+const PAL = {
+  hel: { bg:'#04050a', dim:'#121826', fog:'#222a3b', fog2:'#343e55', stone:'#4c566d', stone2:'#7c869c',
+         pale:'#b6bed0', white:'#e8ecf5', blue:'#3f5fe0', blue2:'#6f8cff', ice:'#a9bcff', deep:'#18234d',
+         moss:'#2c4669', moss2:'#4d72a8', player:'#eef1f8', undead:'#7f899e', undeadHead:'#c8cfdc',
+         sword:'#b4c5ff', ember:'#6e2a2a', rust:'#6a5a55' },
+  mid: { bg:'#040905', dim:'#0e2114', g1:'#163a20', g2:'#246638', g3:'#4cba62', g4:'#a2e26c',
+         y1:'#f2c94c', y2:'#fff0a6', y0:'#5a4f1e', p1:'#ff4f9a', p2:'#ff9fcf', p3:'#7e2554',
+         white:'#effde6', player:'#f4fff0', sword:'#d6f5ff', bark:'#29452a' },
+  asg: { bg:'#f6f4ef', l1:'#e6e1d6', l2:'#d0c9b9', l3:'#9e9686', ink:'#2b2924', gold:'#c39a3a',
+         player:'#2b2924', sword:'#7d776a' }
+};
+const GOLD = '#f2c35a', GOLD2 = '#a97f2b';
+
+/* ================================================================
+   STATE
+   ================================================================ */
+const S = { mode:'title', scene:'hel_start', realm:'hel', life:10, max:10,
+  inv:{ tyrfing:false, axe:false, wisdom:false }, w:{}, deaths:0, seq:0,
+  locked:false, combat:false, foes:[], wander:[], parts:[], onClear:null,
+  shake:0, flash:0, fade:0, bumpT:0, deadT:0, banner:null, t:0, trans:false };
+const P = { x:30, yo:0, face:1, tx:null, cb:null, moving:false, walk:0, swing:0,
+  climb:null, speed:1, cd:0, pend:null, hurt:0 };
+
+function freshWorld(){
+  return { sword:true, axe:true, shrineCleared:false, cryptCleared:false, cryptVisited:false,
+    chestOpen:false, wisdomInChest:true, prison:'untouched', keyAnim:0, lineCut:false,
+    strain:0, sink:0, warned50:false, warned80:false, fire:0, burning:false,
+    tip:false, lowWarn:false, noWeaponWarn:0 };
+}
+S.w = freshWorld();
+
+/* ================================================================
+   CHARACTER BUFFER
+   ================================================================ */
+const N = COLS*ROWS;
+const BCH = new Array(N), BCO = new Array(N);
+function clr(){ BCH.fill(null); BCO.fill(null); }
+function put1(x,y,ch,c){
+  x = Math.round(x); y = Math.round(y);
+  if (x<0||x>=COLS||y<0||y>=ROWS||ch===' ') return;
+  const k = y*COLS+x; BCH[k] = ch==='`' ? ' ' : ch; BCO[k] = c;
+}
+function putE1(x,y,ch,c){
+  x = Math.round(x); y = Math.round(y);
+  if (x<0||x>=COLS||y<0||y>=ROWS) return;
+  if (BCH[y*COLS+x]==null) put1(x,y,ch,c);
+}
+function put(x,y,s,c){ for (let i=0;i<s.length;i++) put1(x+i,y,s[i],c); }
+function art(x,y,lines,c){ lines.forEach((l,i)=>put(x,y+i,l,typeof c==='function'?c(i):c)); }
+function center(y,s,c){ put(Math.floor((COLS-s.length)/2),y,s,c); }
+function blank(x0,y0,x1,y1){ for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) put1(x,y,'`',null); }
+
+function hh(x,y){ const n = Math.sin(x*127.1+y*311.7)*43758.5453; return n-Math.floor(n); }
+function vn(x,y){
+  const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi, s=t=>t*t*(3-2*t);
+  const a=hh(xi,yi), b=hh(xi+1,yi), c=hh(xi,yi+1), d=hh(xi+1,yi+1), u=s(xf), v=s(yf);
+  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+}
+const pick = (arr,r) => arr[Math.min(arr.length-1, Math.floor(r*arr.length))];
+const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+const lerp = (a,b,k) => a+(b-a)*k;
+
+/* ================================================================
+   DRAWING HELPERS
+   ================================================================ */
+function fog(y0,y1,th,c1,c2,t,sp=1,chars='~-.'){
+  for (let y=y0;y<=y1;y++) for (let x=0;x<COLS;x++){
+    const n = vn(x*0.07 + t*0.22*sp + y*3.1, y*0.45 + t*0.05);
+    if (n>th){ const r=(n-th)/(1-th); putE1(x,y, r>0.6?chars[0]:r>0.3?chars[1]:chars[2], r>0.45?c2:c1); }
+  }
+}
+function ground(fl, surf, fill, cs, cf){
+  for (let x=0;x<COLS;x++){
+    const fy = fl(x), sy = fy+1;
+    const ch = fl(x+1)>fy ? '\\' : fl(x-1)>fy ? '/' : pick(surf, hh(x,sy));
+    put1(x,sy,ch,cs);
+    for (let y=sy+1;y<ROWS;y++){
+      const r = hh(x*1.3,y*2.1), dens = 0.8-(y-sy)*0.07;
+      if (r<dens) put1(x,y,pick(fill,hh(y,x)), pick(cf,hh(x+7,y*3)));
+      else put1(x,y,'`',null);
+    }
+  }
+}
+function flakes(t,n,c1,c2,speed=1.6,drift=1.5,chars='.*'){
+  for (let i=0;i<n;i++){
+    const sp = (0.6+hh(i,3)*1.4)*speed;
+    const x = Math.floor(((hh(i,1)*COLS + Math.sin(t*0.6+i)*2 + t*drift) % COLS + COLS) % COLS);
+    const y = Math.floor((hh(i,2)*ROWS + t*sp) % ROWS);
+    putE1(x,y, hh(i,4)>0.8?chars[1]:chars[0], hh(i,5)>0.5?c1:c2);
+  }
+}
+function trunk(cx,top,bot,hwTop,hwBot,cBark,cBark2,cMoss,cMoss2){
+  for (let y=top;y<=bot;y++){
+    const k=(y-top)/Math.max(1,bot-top);
+    const hw=Math.round(hwTop+(hwBot-hwTop)*Math.pow(k,3));
+    const wob=Math.round(Math.sin(y*0.55)*1.1);
+    const l=cx-hw+wob, r=cx+hw+wob;
+    put1(l,y,k>0.75?'/':'(',cBark2); put1(r,y,k>0.75?'\\':')',cBark2);
+    for (let x=l+1;x<r;x++){
+      const v=hh(x*0.9,y*1.7), mossy=vn(x*0.3,y*0.25)>0.55;
+      if (mossy && v<0.55) put1(x,y,pick('%&";*',hh(y,x)), v<0.2?cMoss2:cMoss);
+      else if (v<0.35) put1(x,y,(x%3===0)?'|':':',cBark);
+      else if (v<0.5) put1(x,y,'|',cBark2);
+      else put1(x,y,'`',null);
+    }
+  }
+  // roots spreading into the ground
+  for (let i=0;i<6;i++){
+    const side=i%2?1:-1, len=7+i*2, y0=bot-4+(i>>1);
+    let py=null;
+    for (let s=1;s<=len;s++){
+      const x=cx+side*(hwBot-1+s), y=y0+Math.floor(s*(bot+1-y0)/len);
+      put1(x,y, y!==py ? (side>0?'\\':'/') : '_', s%4===0?cMoss:cBark2);
+      py=y;
+    }
+  }
+}
+function pine(x,base,h,cA,cB,cT){
+  const top=base-h-1;
+  for (let k=0;k<h;k++){
+    const y=top+k, w=Math.floor(k*0.8);
+    put1(x-w-1,y,'/',cB); put1(x+w+1,y,'\\',cB);
+    for (let i=-w;i<=w;i++) put1(x+i,y, hh(x+i,y)<0.5?'^':'*', hh(i,y)<0.4?cB:cA);
+  }
+  put(x-1,base-1,'|||'.slice(0,2),cT); put(x-1,base,'||',cT);
+}
+function oak(x,base,r,cols,cT){
+  const cy=base-r-3;
+  for (let dy=-r;dy<=r;dy++) for (let dx=-r*2;dx<=r*2;dx++){
+    const e=(dx*dx)/(r*r*4)+(dy*dy)/(r*r);
+    if (e<1-0.25*hh(x+dx,cy+dy)){
+      const v=hh(dx+x*3,dy+cy);
+      put1(x+dx,cy+dy,pick('@%&8o*',v), pick(cols,hh(dx,dy+x)));
+    }
+  }
+  for (let y=cy+r-1;y<=base;y++) put(x-1,y,'|:|',cT);
+  put(x-2,base,'/   \\'.slice(0,5),cT);
+}
+function line(x0,y0,x1,y1,c,jit=0,t=0){
+  const dx=x1-x0, dy=y1-y0, steps=Math.max(Math.abs(dx),Math.abs(dy)*2,1);
+  const vs=(dy*2)/(dx||0.0001);
+  const ch = Math.abs(vs)<0.45 ? '-' : Math.abs(vs)>2.6 ? '|' : (vs>0?'\\':'/');
+  for (let i=0;i<=steps;i++){
+    const k=i/steps;
+    const j = jit ? Math.sin(k*18+t*28)*jit*Math.sin(k*Math.PI) : 0;
+    put1(x0+dx*k, y0+dy*k+j, ch, c);
+  }
+}
+
+/* 4x6 pixel font for the title (each pixel = 2 columns, drawn with its own letter) */
+const F4 = {
+  R:['###.','#..#','###.','#.#.','#..#','#..#'], E:['####','#...','###.','#...','#...','####'],
+  D:['###.','#..#','#..#','#..#','#..#','###.'], M:['#..#','####','####','#..#','#..#','#..#'],
+  P:['###.','#..#','#..#','###.','#...','#...'], T:['####','.##.','.##.','.##.','.##.','.##.'],
+  I:['####','.##.','.##.','.##.','.##.','####'], O:['.##.','#..#','#..#','#..#','#..#','.##.'],
+  N:['#..#','##.#','##.#','#.##','#.##','#..#']
+};
+function bigWord(word,x,y,colFn){
+  for (const L of word){
+    const g=F4[L], lc=L.toLowerCase();
+    if (g) g.forEach((row,r)=>{ for (let c=0;c<4;c++) if (row[c]==='#'){ put1(x+c*2,y+r,lc,colFn(r)); put1(x+c*2+1,y+r,lc,colFn(r)); } });
+    x+=9;
+  }
+}
+
+/* ================================================================
+   SPRITES
+   ================================================================ */
+function weapon(){ return S.inv.axe ? 'axe' : S.inv.tyrfing ? 'tyrfing' : null; }
+function pal(){ return PAL[S.realm]; }
+function floorAt(x){ const sc=SC[S.scene]; return typeof sc.floor==='function' ? sc.floor(Math.round(x)) : sc.floor; }
+function minX(sc){ return sc.minX ?? 2; }
+function maxX(sc){ return sc.maxX ?? COLS-3; }
+
+function drawPlayer(){
+  const pl=pal(), x=Math.round(P.x), y=Math.round(floorAt(P.x)+P.yo), f=P.face;
+  const c = P.hurt>0 && Math.floor(S.t*20)%2 ? (S.realm==='hel'?pl.blue2:pl.p1||pl.gold) : pl.player;
+  const step = P.moving && Math.floor(P.walk*7)%2;
+  put1(x,y-2,'o',c);
+  put(x-1,y-1, P.climb ? '\\|/' : '/|\\', c);
+  put(x-1,y, step ? '| |' : '/ \\', c);
+  const w=weapon(); if (!w || P.climb) return;
+  const wc = w==='axe' ? GOLD : pl.sword;
+  if (P.swing>0){
+    if (w==='axe') put(f>0?x+2:x-4,y-1, f>0?'--P':'q--', wc);
+    else put(f>0?x+2:x-4,y-1, f>0?'==-':'-==', wc);
+    put1(x+3*f,y-2, f>0?'\\':'/', S.realm==='hel'?PAL.hel.ice:wc);
+    put1(x+4*f,y, f>0?'/':'\\', S.realm==='hel'?PAL.hel.ice:wc);
+  } else {
+    if (w==='axe') put1(x+2*f,y-2, f>0?'P':'q', wc);
+    else put1(x+2*f,y-2, f>0?'/':'\\', wc);
+  }
+  // Tyrfing glows in the dark of Hel
+  const sc=SC[S.scene];
+  if (S.inv.tyrfing && sc.dark && S.realm==='hel'){
+    for (let i=0;i<10;i++){
+      const a=i/10*Math.PI*2+S.t*0.8, r=3.2+Math.sin(S.t*3+i)*0.6;
+      putE1(x+Math.cos(a)*r*2, y-1+Math.sin(a)*r*0.9, '.', i%3?PAL.hel.deep:PAL.hel.blue);
+    }
+  }
+}
+function drawUndead(x,fy,face,walk,atk,flash,off=0){
+  const H=PAL.hel, X=Math.round(x), Y=fy+off;
+  const cb = flash>0 ? H.white : H.undead, chd = flash>0 ? H.white : H.undeadHead;
+  if (Y-2<=fy) put1(X,Y-2,'O',chd);
+  if (Y-1<=fy) put(X-1,Y-1, atk>0 ? (face>0?'-#=':'=#-') : (face>0?'/#-':'-#\\'), cb);
+  if (Y<=fy) put(X-1,Y, Math.floor(walk*5)%2 ? '| |' : '/ \\', cb);
+}
+function drawFoes(){
+  for (const f of S.foes){
+    const fy=floorAt(f.x);
+    drawUndead(f.x,fy,f.face,f.walk,f.atk,f.flash, Math.round((1-f.rise)*3));
+  }
+}
+function drawWander(){
+  for (const w of S.wander) drawUndead(w.x,floorAt(w.x),w.face,w.walk,0,0);
+}
+function burst(x,y,cols,n=14,chars='.,\'`*'){
+  for (let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, s=6+Math.random()*14;
+    S.parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s*0.5-6,ch:pick(chars,Math.random()),c:pick(cols,Math.random()),life:0.6+Math.random()*0.8});
+  }
+}
+function drawParts(){ for (const p of S.parts) put1(p.x,p.y,p.ch,p.c); }
+
+/* ================================================================
+   SCENES
+   ================================================================ */
+const SC = {};
+const H = PAL.hel, M = PAL.mid, A = PAL.asg;
+
+/* ---------- HEL : the frozen waste (start) ---------- */
+SC.hel_start = {
+  realm:'hel', title:'Hel — The Frozen Waste', floor:F,
+  exits:{ left:'hel_shrine_out', right:'hel_slope', up:'mid_start' },
+  zones:{ up:[55,65] }, arrive:{ down:60, start:28 },
+  desc(){ return 'You are standing in a dismally cold, foggy wasteland stretching left and right. '
+    + (S.w.sword ? 'There is a glinting sword stuck in the frozen ground beneath you. ' : '')
+    + 'There are vast, mossy roots of Yggdrasil towering above you. You could climb them.'; },
+  draw(t){
+    const hz=x=>14+Math.round(vn(x*0.05,2)*4); for (let x=0;x<COLS;x++){ const a=hz(x), b=hz(x+1); put1(x,a, b<a?'/':b>a?'\\':(hh(x,3)<0.3?'-':'_'), H.fog); }
+    fog(2,13,0.62,H.dim,H.fog,t,0.6);
+    trunk(60,0,F,6,9,H.stone,H.stone2,H.moss,H.moss2);
+    ground(()=>F,'=-_=~','.,\':*.',H.stone,[H.fog2,H.fog,H.stone,H.moss]);
+    put(10,F,'.n.',H.stone); put(88,F,'_o.',H.stone); put(100,F,'.A',H.fog2);
+    if (S.w.sword){
+      put1(34,F-3,'o',H.pale); put(33,F-2,'-+-',H.pale); put1(34,F-1,'|',H.ice); put1(34,F,'|',H.ice);
+      const g=Math.floor(t*4)%8; if (g<2) put1(34,F-1-g,'*',H.white);
+    }
+  },
+  front(t){ flakes(t,40,H.stone2,H.fog2); fog(16,F,0.7,H.dim,H.fog,t,1.3); },
+  hots(){
+    const a=[];
+    if (S.w.sword) a.push({x0:32,x1:36,y0:F-3,y1:F,label:'take the sword',fn:()=>act('take')});
+    a.push({x0:46,x1:74,y0:0,y1:F,label:'climb the roots',fn:()=>act('up')});
+    return a;
+  },
+  choices(){ const c=[]; if (S.w.sword) c.push(['pick up','take']); c.push(['go left','left'],['go right','right'],['climb up','up']); return c; },
+  on:{ take(){
+    if (!S.w.sword) return say('There is nothing here to take.','sys');
+    walkTo(34,()=>{ S.w.sword=false; S.inv.tyrfing=true; burst(34,F-2,[H.ice,H.white,H.blue2]);
+      say('You have found Tyrfing, the cursed dwarf sword. It will help you in your travels.','alert'); refresh(); });
+  }}
+};
+
+/* ---------- HEL : outside the shrine ---------- */
+const SHRINE = [
+  "         _______________         ",
+  "    ____/_______________\\____    ",
+  "   /_________________________\\   ",
+  "   |##|  _______________  |##|   ",
+  "   |##| |               | |##|   ",
+  "   |##| |               | |##|   ",
+  "   |##| |               | |##|   ",
+  "   |##| |               | |##|   ",
+  "  _|##|_|               |_|##|_  "
+];
+function startShrineFight(){
+  S.combat=true; P.tx=null; P.cb=null;
+  S.foes = S.wander.map(w=>mkFoe(w.x,2,0)); S.wander=[];
+  S.foes.forEach(f=>f.rise=1);
+  S.onClear=()=>{ S.w.shrineCleared=true; say('You are free to enter the shrine.','alert'); refresh(); };
+  say('The figures turn toward you. They are the undead, and they attack!','alert');
+  combatTip();
+}
+SC.hel_shrine_out = {
+  realm:'hel', title:'Hel — The Shrine', floor:F, minX:20,
+  exits:{ left:'hel_shrine_in', right:'hel_start' }, arrive:{ right:22 },
+  desc(){ return S.w.shrineCleared
+    ? 'You reach a squat stone shrine. The undead lie still around it. You are free to enter the shrine.'
+    : 'You reach a squat stone shrine. You can make out figures wandering aimlessly surrounding it.'; },
+  enter(){ if (!S.w.shrineCleared) S.wander=[26,36,47,58].map((x,i)=>({x,face:i%2?1:-1,sp:0.8+i*0.25,tt:Math.random()*3,walk:0})); },
+  update(dt){
+    if (!S.w.shrineCleared && !S.combat && !S.locked && P.x<76) startShrineFight();
+    for (const w of S.wander){ w.tt-=dt; if (w.tt<=0){ w.face=Math.random()<0.5?-1:1; w.tt=1.5+Math.random()*3; }
+      w.x=clamp(w.x+w.face*w.sp*dt*1.4,22,64); w.walk+=dt*0.5; }
+  },
+  canExit(dir){
+    if (dir==='left' && !S.w.shrineCleared){
+      if (!S.combat) startShrineFight(); else say('The undead block your way.','sys');
+      return false;
+    }
+    return true;
+  },
+  draw(t){
+    for (let x=0;x<COLS;x++){ const hy=13+Math.round(vn(x*0.05,5)*4); put1(x,hy,'_',H.fog); }
+    fog(1,12,0.6,H.dim,H.fog,t,0.6);
+    art(4,F-8,SHRINE,i=>i<3?H.stone2:H.stone);
+    for (let y=F-4;y<=F;y++) for (let x=13;x<=27;x++){
+      const L=0.5+0.5*Math.sin(t*5+x)*Math.sin(t*3.1);
+      if (hh(x,y+Math.floor(t*3))<0.12+L*0.08) put1(x,y,'.',L>0.6?H.blue2:H.deep);
+    }
+    ground(()=>F,'=-_=','.,\':.',H.stone,[H.fog2,H.fog,H.stone]);
+    put(70,F,'.o',H.stone); put(90,F,'n.',H.stone);
+  },
+  front(t){ flakes(t,36,H.stone2,H.fog2); fog(15,F,0.7,H.dim,H.fog,t,1.2); },
+  hots(){ return [{x0:12,x1:28,y0:F-5,y1:F,label: S.w.shrineCleared?'enter the shrine':'approach the shrine',fn:()=>act('left')}]; },
+  choices(){ return S.w.shrineCleared ? [['go left','left'],['go right','right']] : S.combat ? [['strike','attack'],['go right','right']] : [['go left','left'],['go right','right']]; }
+};
+
+/* ---------- HEL : inside the shrine ---------- */
+const AXE = ["  _   _   _  "," / \\_| |_/ \\ ","|    | |    |"," \\_/ | | \\_/ ","     | |     ","     |_|     "];
+const PLINTH = [" [=========] ","  |       |  "," _|_______|_ "];
+SC.hel_shrine_in = {
+  realm:'hel', title:'Hel — Within the Shrine', floor:F,
+  exits:{ right:'hel_shrine_out' }, arrive:{ left:104 },
+  desc(){ return S.w.axe
+    ? 'Iron-wrought sconces line the rough stone. Their flickering light casts onto a brutal, glimmering golden axe.'
+    : 'Iron-wrought sconces line the rough stone. Their flickering light falls on an empty plinth.'; },
+  draw(t){
+    const sc=[22,56,90], fl=s=>0.82+0.13*Math.sin(t*9+s)+0.05*Math.sin(t*23+s*2);
+    for (let y=0;y<=F;y++) for (let x=0;x<COLS;x++){
+      const pat = (y%2===0) ? (x%8===0?'|':'_') : ((x+4)%8===0?'|':'_');
+      let L=0; for (const s of sc){ const dx=(x-s)*0.5, dy=y-7; L=Math.max(L,(1-Math.sqrt(dx*dx+dy*dy)/10)*fl(s)); }
+      const col = L>0.7?H.stone2 : L>0.45?H.stone : L>0.2?H.fog2 : H.dim;
+      if (L>0.08 || hh(x,y)<0.35) put1(x,y,pat,col);
+    }
+    for (const s of sc){
+      const ph=Math.floor(t*10+s)%3;
+      put1(s,5, ph===0?'.':'\'', H.blue2);
+      put1(s,6, ph===1?'(':')', H.ice);
+      put1(s,7,'^',H.white);
+      put(s-1,8,'\\_/',H.stone2); put1(s,9,'|',H.stone2); put1(s,10,'|',H.stone);
+    }
+    art(50,F-2,PLINTH,H.stone2);
+    if (S.w.axe){
+      art(50,F-8,AXE,i=>i<4?GOLD:GOLD2);
+      const g=Math.floor(t*3)%7; if (g<3) put1(51+g*5,F-7+(g%2),'*',H.white);
+    }
+    ground(()=>F,'_=_-','.:,',H.stone,[H.fog,H.fog2]);
+  },
+  hots(){ return S.w.axe ? [{x0:49,x1:63,y0:F-8,y1:F,label:'take the golden axe',fn:()=>act('take')}] : []; },
+  choices(){ const c=[]; if (S.w.axe) c.push(['pick up','take']); c.push(['go right','right']); return c; },
+  on:{ take(){
+    if (!S.w.axe) return say('There is nothing here to take.','sys');
+    walkTo(56,()=>{ S.w.axe=false; S.inv.axe=true; burst(56,F-6,[GOLD,H.white,GOLD2],22);
+      say('You have found Forseti\u2019s Golden Axe. It may help you in your travels.','alert'); refresh(); });
+  }}
+};
+
+/* ---------- HEL : the slope ---------- */
+const slopeF = x => x<28 ? F : x>86 ? F+4 : F+Math.round((x-28)/58*4);
+SC.hel_slope = {
+  realm:'hel', title:'Hel — The Descent', floor:slopeF,
+  exits:{ left:'hel_start', right:'hel_hole' },
+  desc(){ return S.inv.tyrfing
+    ? 'You notice the wasteland begins to slope downwards. It\u2019s getting darker. Your sword begins to glow.'
+    : 'You notice the wasteland begins to slope downwards. It\u2019s getting darker. You can barely see your own hands.'; },
+  dark(){ return { grad:[0.0,0.7] }; },
+  draw(t){
+    fog(1,16,0.6,H.dim,H.fog,t,0.5);
+    const tree=(x,b,c)=>{ put(x-2,b-6,'\\ | /',c); put(x-1,b-5,'\\|/',c); for(let y=b-4;y<=b;y++) put1(x,y,'|',c); put(x-1,b-2,'/',c); };
+    tree(18,F,H.stone); tree(52,slopeF(52),H.fog2); tree(78,slopeF(78),H.stone);
+    ground(slopeF,'=-_.','.,\':',H.stone,[H.fog,H.fog2,H.stone]);
+    put(40,slopeF(40),'.o',H.stone); put(95,F+4,'o.',H.fog2);
+  },
+  front(t){ flakes(t,24,H.stone2,H.fog2,1.2); fog(10,F+3,0.68,H.dim,H.fog,t,1.4); },
+  choices(){ return [['go left','left'],['go right','right']]; }
+};
+
+/* ---------- HEL : the hole with the ladder ---------- */
+const HF = F+4;
+SC.hel_hole = {
+  realm:'hel', title:'Hel — The Hole', floor:HF,
+  exits:{ left:'hel_slope', right:'hel_prison', down:'hel_crypt' }, zones:{ down:[46,54] },
+  desc(){ return 'You notice a stone wrought hole in the ground. There is a rusting iron ladder descending into darkness. Further in the distance, you see unnaturally large '
+    + (S.w.cryptVisited ? 'iron bars' : 'beams') + ' ascending into fog.'; },
+  dark(){ return { base:0.45 }; },
+  draw(t){
+    const bc = S.w.cryptVisited ? H.stone : H.fog2;
+    for (let x=80;x<COLS;x+=6) for (let y=0;y<=HF;y++) put1(x,y,'|',bc);
+    if (S.w.cryptVisited) for (let x=79;x<COLS;x++) put1(x,7,'=',H.fog2);
+    fog(0,14,0.58,H.dim,H.fog,t,0.4);
+    ground(()=>HF,'=-_','.,:',H.stone,[H.fog,H.fog2]);
+    for (let y=HF+1;y<ROWS;y++){ put1(45,y,'[',H.stone2); put1(55,y,']',H.stone2); for (let x=46;x<=54;x++) put1(x,y,'`',null); }
+    for (let y=HF-2;y<ROWS;y++){ put1(47,y,'#',H.rust); put1(53,y,'#',H.rust); if (y>HF-2) put(48,y,'=====',H.rust); }
+  },
+  front(t){ fog(0,HF,0.66,H.dim,H.fog2,t,1.1); },
+  hots(){ return [{x0:45,x1:55,y0:HF-3,y1:ROWS-1,label:'climb down the ladder',fn:()=>act('down')}]; },
+  choices(){ return [['go down','down'],['go left','left'],['go right','right']]; }
+};
+
+/* ---------- HEL : the crypt ---------- */
+const CF = 23;
+const CHEST_C = ["  ________  "," /========\\ ","|[==(oo)==]|","|__________|"];
+const CHEST_O = ["   ________ ","  /_______/ "," |~~~~~~~~| ","|[========]|","|__________|"];
+SC.hel_crypt = {
+  realm:'hel', title:'Hel — The Crypt', floor:CF, maxX:89,
+  exits:{ up:'hel_hole' }, zones:{ up:[6,12] },
+  desc(){
+    if (!S.w.cryptCleared) return 'You enter a cramped, square room filled with the undead. There is a glowing chest behind them.';
+    if (!S.w.chestOpen) return 'A cramped, square room. The undead lie still. The chest glows behind them.';
+    if (S.w.wisdomInChest) return 'The chest lies open. There is something in there.';
+    return 'A cramped, square room. The undead lie still. The chest is empty.';
+  },
+  enter(){
+    S.w.cryptVisited=true;
+    if (!S.w.cryptCleared){
+      S.combat=true;
+      S.foes=[44,56,67,77,85].map((x,i)=>mkFoe(x,2,0.8+i*0.55));
+      S.onClear=()=>{ S.w.cryptCleared=true; say('The last of the undead crumbles. The chest glows brighter.','alert'); refresh(); };
+      setTimeout(combatTip, 50);
+    }
+  },
+  dark(){ const L=[]; if (S.w.wisdomInChest) L.push([97,CF-3,14+Math.sin(S.t*2)*2]); return { base:0.5, lights:L }; },
+  draw(t){
+    for (let y=4;y<=CF;y++) for (let x=3;x<=108;x++){
+      const pat=(y%2===0)?(x%7===0?'|':'_'):((x+3)%7===0?'|':'_');
+      if (hh(x,y)<0.55) put1(x,y,pat,H.dim);
+    }
+    for (let y=0;y<=CF;y++){ put(0,y,'###',H.stone); put(109,y,'###',H.stone); }
+    for (let x=0;x<COLS;x++){ if (x<6||x>12){ put1(x,2,'#',H.stone); put1(x,3,'=',H.stone2); } }
+    for (let y=0;y<=CF;y++){ put1(7,y,'#',H.rust); put1(11,y,'#',H.rust); if (y%2) put(8,y,'===',H.rust); }
+    const bones=[[22,'~o'],[34,'.,'],[61,'-o-'],[72,'~.'],[83,',o']];
+    for (const [x,b] of bones) put(x,CF,b,H.stone);
+    if (!S.w.chestOpen){
+      const g = Math.sin(t*2.4)>0 ? H.blue2 : H.ice;
+      art(92,CF-3,CHEST_C,i=>i===2?g:H.stone2);
+      if (Math.floor(t*3)%4===0) put1(97+Math.floor(t)%3,CF-4,'*',H.ice);
+    } else {
+      art(92,CF-4,CHEST_O,i=>i===2?H.blue2:H.stone2);
+      if (S.w.wisdomInChest){
+        const y=CF-9+Math.round(Math.sin(t*2)*0.6);
+        put(95,y-1,'\\ | /',H.blue2); put(95,y,'-(@)-',H.white); put(95,y+1,'/ | \\',H.blue2);
+      }
+    }
+    ground(()=>CF,'=_=-','.,:#',H.stone,[H.fog,H.fog2,H.stone]);
+  },
+  hots(){
+    const a=[];
+    if (!S.w.chestOpen) a.push({x0:92,x1:103,y0:CF-3,y1:CF,label:'open the chest',fn:()=>act('open')});
+    else if (S.w.wisdomInChest) a.push({x0:92,x1:103,y0:CF-11,y1:CF,label:'take what is inside',fn:()=>act('take')});
+    a.push({x0:5,x1:13,y0:0,y1:CF,label:'climb the ladder',fn:()=>act('up')});
+    return a;
+  },
+  choices(){
+    if (S.combat) return [['strike','attack'],['go up','up']];
+    const c=[]; if (!S.w.chestOpen) c.push(['open chest','open']); else if (S.w.wisdomInChest) c.push(['pick up','take']);
+    c.push(['go up','up']); return c;
+  },
+  on:{
+    open(){
+      if (S.combat) return say('The undead stand between you and the chest.','sys');
+      if (S.w.chestOpen) return say('The chest is already open.','sys');
+      walkTo(89,()=>{ S.w.chestOpen=true; burst(97,CF-3,[H.ice,H.white,H.blue2],18);
+        say('You open the chest. There is something in there.','alert'); refresh(); });
+    },
+    take(){
+      if (S.combat) return say('The undead stand between you and the chest.','sys');
+      if (!S.w.chestOpen) return act('open');
+      if (!S.w.wisdomInChest) return say('The chest is empty.','sys');
+      walkTo(89,()=>{ S.w.wisdomInChest=false; S.inv.wisdom=true; burst(97,CF-9,[H.ice,H.white],20);
+        say('You have found Odin\u2019s Wisdom. It may help you in your travels.','alert'); refresh(); });
+    }
+  }
+};
+
+/* ---------- HEL : the prison ---------- */
+const LOCK = ["  .--.  "," /    \\ ","|      |","[======]","[  ()  ]","[  ||  ]","[======]"];
+async function prisonEvent(){
+  const my=S.seq; S.locked=true;
+  await wait(900); if (my!==S.seq) return;
+  P.speed=0.3; await walkP(46); P.speed=1; if (my!==S.seq) return;
+  await wait(500); if (my!==S.seq) return;
+  if (S.inv.wisdom){
+    S.flash=1; S.w.prison='sealed'; burst(50,HF-4,[H.white,H.ice,H.stone2],26,'.:\'');
+    await say('Odin\u2019s Wisdom has Protected you.','big');
+    await say('The iron key crumbles to dust. The voice falls silent.');
+  } else {
+    S.w.keyAnim=0.001; await wait(1400); if (my!==S.seq) return;
+    S.w.keyAnim=0; S.w.prison='unlocked'; S.shake=0.7; burst(57,HF-3,[H.stone2,H.white,H.ember],20);
+    await say('Your hand takes the key before you can stop it. The padlock falls open with a sound like a mountain breaking.');
+    await say('Somewhere beyond the bars, something vast exhales.','alert');
+  }
+  if (my!==S.seq) return;
+  S.locked=false; refresh();
+}
+SC.hel_prison = {
+  realm:'hel', title:'Hel — The Iron Bars', floor:HF, maxX:46,
+  exits:{ left:'hel_hole' },
+  desc(){
+    if (S.w.prison==='untouched') return 'You discover iron prison bars impossibly tall. There is a giant padlock with an iron key beside it. There is a voice calling out to you. You feel drawn in\u2026.';
+    if (S.w.prison==='unlocked') return 'The impossibly tall bars stand open. The padlock lies on the frozen ground. Something breathes in the dark beyond.';
+    return 'The impossibly tall bars stand locked. The voice has gone silent.';
+  },
+  enter(){ if (S.w.prison==='untouched') prisonEvent(); },
+  update(dt){ if (S.w.keyAnim>0) S.w.keyAnim=Math.min(1,S.w.keyAnim+dt/1.2); },
+  dark(){ return { base:0.48, lights: S.w.prison==='sealed' ? [[57,HF-3,8]] : [] }; },
+  draw(t){
+    const open = S.w.prison==='unlocked';
+    for (let i=0;i<14;i++){
+      const x=60+Math.floor(hh(i,9)*50), y=2+Math.floor(hh(i,8)*(HF-3));
+      if (Math.sin(t*(1+hh(i,3))+i)>(open?-0.2:0.4)) put1(x,y,pick('.*\'',hh(i,7)), open&&i%3===0?'#a8432f':H.ember);
+    }
+    if (S.w.prison==='untouched'){
+      const words=['come...','closer','free me','the key...','closer...','come'];
+      const i=Math.floor(t/2.2)%words.length, ph=(t/2.2)%1;
+      const c = ph<0.2||ph>0.8 ? H.dim : ph<0.35||ph>0.65 ? H.fog2 : H.stone2;
+      put(64+Math.floor(hh(i,1)*36),3+Math.floor(hh(i,2)*14),words[i],c);
+    }
+    for (let x=58;x<=110;x+=5) for (let y=0;y<=HF;y++){
+      if (open && x<=68 && y>8) continue;
+      put1(x,y,'|',H.stone2); put1(x+1,y,'|',H.stone);
+    }
+    for (const r of [6,16]) for (let x=57;x<COLS;x++){ if (open && x<=70 && r>8) continue; put1(x,r,'=',H.stone); }
+    if (!open){
+      art(54,HF-6,LOCK,i=>S.w.prison==='sealed'?(i<3?H.stone2:H.ice):(i<3?H.stone2:H.pale));
+    } else {
+      put(52,HF-1,'\\__/',H.stone2); put(52,HF,'[==]',H.stone2);
+    }
+    if (S.w.prison==='untouched'){
+      put(49,HF-7,'-+-',H.stone);
+      let kx=50, ky=HF-6;
+      if (S.w.keyAnim>0){ const k=S.w.keyAnim; kx=lerp(50,57,k); ky=lerp(HF-6,HF-4,k); }
+      put1(kx,ky,'O',H.pale); put1(kx,ky+1,'|',H.pale); put(kx,ky+2,'|=',H.pale); put(kx,ky+3,'|=',H.pale);
+    }
+    ground(()=>HF,'=-_','.,:',H.stone,[H.fog,H.fog2]);
+  },
+  front(t){ fog(0,12,0.66,H.dim,H.fog2,t,0.9); },
+  hots(){ return S.w.prison==='untouched' ? [] : [{x0:0,x1:4,y0:0,y1:ROWS-1,label:'go left',fn:()=>act('left')}]; },
+  choices(){ return S.locked ? [] : [['go left','left']]; }
+};
+
+/* ---------- MIDGARD : the forest ---------- */
+SC.mid_start = {
+  realm:'mid', title:'Midgard — The Verdant Wood', floor:F,
+  exits:{ left:'mid_cliff', right:'mid_clearing' }, arrive:{ up:56 },
+  desc(){ return 'You are in a lush green forest land surrounded by verdant wood. To your left, you catch a faint seabreeze. To your right, there is a path leading deeper into the woods.'; },
+  draw(t){
+    for (const x of [6,20,38,74,92,106]) pine(x,F-3,10+Math.floor(hh(x,1)*5),M.g1,M.dim,M.dim);
+    for (const x0 of [16,70,96]) for (let y=0;y<16;y++) if (hh(y,x0)<0.45) putE1(x0+y*0.6,y,'/',M.y0);
+    oak(28,F,4,[M.g2,M.g3,M.g3,M.g4,M.y1],M.bark);
+    oak(84,F,5,[M.g2,M.g3,M.g4,M.p2],M.bark);
+    for (let y=6;y<=15;y++) for (let x=0;x<14;x++){ const n=vn(x*0.3+t*1.2,y*0.7); if (n>0.72) putE1(x,y,'~',n>0.82?M.p2:M.p3); }
+    ground(()=>F,'"\',;"','.,\'`',M.g3,[M.g1,M.g2,M.dim]);
+    for (let x=0;x<COLS;x+=1) if (hh(x,77)<0.12) put1(x,F, hh(x,78)<0.5?'*':'o', hh(x,79)<0.5?M.p1:M.y1);
+  },
+  front(t){ flakes(t,22,M.y1,M.y2,0.25,0.6,'.\''); flakes(t+40,10,M.p2,M.p1,0.5,2,',\''); },
+  choices(){ return [['go left','left'],['go right','right']]; }
+};
+
+/* ---------- MIDGARD : the cliff and the serpent ---------- */
+const CE=44, CFL=19;
+const cliffF = x => x<CE ? 27 : CFL;
+function cutLine(){
+  S.w.lineCut=true; S.shake=0.5; burst(50,14,[M.y2,M.white,M.y1],22,'-\'.,');
+  say('The line is cut. The serpent descends back into the ocean. You can climb the branch of Yggdrasil now.','alert');
+  refresh();
+}
+SC.mid_cliff = {
+  realm:'mid', title:'Midgard — The Cliff', floor:cliffF, minX:47,
+  exits:{ right:'mid_start', up:'asgard' }, zones:{ up:[47,54] },
+  desc(){ return S.w.lineCut
+    ? 'You stand on a steep cliff. The sea has calmed. The branch of Yggdrasil is free to climb.'
+    : 'You emerge onto a steep cliff. Massive waves writhe below you. The great serpent J\u00f6rmungandr has been caught by Thor\u2019s fishing line. It is wrapped around a great large branch of Yggdrasil. You could climb it, if it wasn\u2019t blocked. If you do nothing, it will soon escape and flood this land.'; },
+  update(dt){
+    if (S.w.lineCut){ S.w.sink=Math.min(1,S.w.sink+dt*0.35); return; }
+    if (S.mode!=='play') return;
+    if (!S.w.lineArmed){ if (typing || queue.length) return; S.w.lineArmed=true; }   // timer starts once the description has finished typing
+    S.w.strain=Math.min(100,S.w.strain+dt*10);
+    if (S.w.strain>=50 && !S.w.warned50){ S.w.warned50=true; say('The line groans. J\u00f6rmungandr thrashes harder.','alert'); }
+    if (S.w.strain>=80 && !S.w.warned80){ S.w.warned80=true; say('The line is fraying! The serpent will soon escape.','alert'); }
+    if (S.w.strain>=100) die('The line snaps. J\u00f6rmungandr tears free and the sea rises over the cliffs. Midgard drowns.');
+  },
+  enter(){ S.w.lineArmed=false; },
+  canExit(dir){ if (dir==='up' && !S.w.lineCut){ say('The branch is blocked by Thor\u2019s fishing line, pulled taut by the serpent.','sys'); return false; } return true; },
+  draw(t){
+    for (let y=1;y<=6;y++) for (let x=0;x<COLS;x++){ const n=vn(x*0.05+t*0.1,y*0.6); if (n>0.7) putE1(x,y,'~',n>0.8?M.p2:M.p3); }
+    const st=S.w.strain/100, sink=S.w.sink;
+    // the serpent
+    let hx=34, hy=12;
+    if (sink<1){
+      const pts=64;
+      for (let i=0;i<pts;i++){
+        const s=i/(pts-1);
+        let x=2+s*32, y=22+3.4*Math.sin(s*10 - t*2.2*(1+st));
+        if (s>0.72){ const k=(s-0.72)/0.28, e=k*k*(3-2*k); y=lerp(y,12+Math.sin(t*3*(1+st))*0.8,e); }
+        y+=sink*14;
+        put1(x,y, i%3?'O':'@', i%2?M.g3:M.g4);
+        put1(x,y+1, ',', M.p1);
+        if (i===pts-1){ hx=Math.round(x); hy=Math.round(y); }
+      }
+      put(hx-1,hy-1,'_^_',M.g4); put1(hx-1,hy,'(',M.g3); put1(hx,hy,'@',M.y1); put(hx+1,hy,'=<',M.g3); put1(hx+2,hy+1,'v',M.white);
+    }
+    // the sea
+    for (let y=22;y<ROWS;y++) for (let x=0;x<CE;x++){
+      const w=Math.sin(x*0.35+t*2.2+y*0.9)+Math.sin(x*0.13-t*1.3);
+      if (y===22){ if (w>0.2) put1(x,y, w>1.2?'^':'~', w>1.2?M.white:M.p2); }
+      else put1(x,y, w>0.9?'~':w>-0.4?'-':'.', w>0.9?M.g3:y<25?M.g2:M.g1);
+    }
+    // cliff
+    for (let y=CFL+1;y<ROWS;y++){
+      const xe=CE-Math.round(hh(y,1)*2)-(y-CFL>4?1:0);
+      put1(xe,y, hh(y,2)<0.5?'|':'(', M.g2);
+      for (let x=xe+1;x<COLS;x++) put1(x,y, hh(x,y)<0.5?pick('#%:.',hh(y,x)):'`', pick([M.g1,M.dim,M.g2],hh(x+1,y)));
+    }
+    for (let x=CE;x<COLS;x++) put1(x,CFL+1, pick('"\',;',hh(x,5)), M.g3);
+    // branch of Yggdrasil
+    for (let y=0;y<=CFL;y++){ put1(48,y,'(',M.g2); put(49,y,hh(y,3)<0.5?'|:|':':||',M.bark); put1(52,y,')',M.g2); }
+    for (const [lx,ly] of [[42,2],[54,4],[44,9],[55,12]]) for (let dx=-3;dx<=3;dx++) for (let dy=-1;dy<=1;dy++)
+      if (hh(lx+dx,ly+dy)<0.7) put1(lx+dx,ly+dy, pick('%&@*',hh(dx,dy+lx)), pick([M.g3,M.g4,M.p2],hh(dy,dx+ly)));
+    // Thor's line
+    const lc=st>0.8 && Math.floor(t*8)%2 ? M.white : M.y2;
+    if (!S.w.lineCut){
+      line(hx+3,hy,47,15,lc,st*0.9,t);
+      for (let y=12;y<=18;y++) put(47,y, y%2?'\\X/X\\X':'/X\\X/X', lc);
+      line(50,11,60,0,M.y1);
+      put(36,8,Math.floor(S.w.strain)+'%', st>0.8?M.p1:M.p2);
+      put(36,9,'line',M.p3);
+    } else {
+      line(60,0,53,10,M.y1);
+      put1(53,11,'\'',M.y1);
+    }
+    for (let x=56;x<COLS;x++) if (hh(x,91)<0.1) put1(x,CFL, hh(x,92)<0.5?'*':'o', hh(x,93)<0.5?M.p1:M.y1);
+  },
+  front(t){ flakes(t,14,M.white,M.p2,0.2,-3,'.\''); },
+  hots(){
+    const a=[{x0:46,x1:54,y0:0,y1:CFL,label:S.w.lineCut?'climb the branch':(S.inv.axe?'cut the line with the axe':S.inv.tyrfing?'cut the line with Tyrfing':'the line'),
+      fn:()=>{ if (S.w.lineCut) act('up'); else if (S.inv.axe) act('use','axe'); else if (S.inv.tyrfing) act('use','tyrfing'); else say('You have nothing to cut the line with.','sys'); }}];
+    return a;
+  },
+  choices(){
+    const c=[];
+    if (!S.w.lineCut){ if (S.inv.tyrfing) c.push(['use Tyrfing','use:tyrfing']); if (S.inv.axe) c.push(['use Forseti\u2019s Golden Axe','use:axe']); }
+    else c.push(['climb up','up']);
+    c.push(['go right','right']); return c;
+  },
+  on:{ use(it){
+    if (!it) return say('Use what?','sys');
+    if (!S.inv[it]) return say('You don\u2019t have that.','sys');
+    if (S.w.lineCut) return say('The line is already cut.','sys');
+    if (it==='wisdom') return say('Odin\u2019s Wisdom cannot cut a line.','sys');
+    walkTo(55,()=>{ P.face=-1; P.swing=0.25;
+      if (it==='tyrfing'){ burst(50,17,[M.white,M.y2],6); say('That does nothing. You need something stronger.'); }
+      else cutLine();
+    });
+  }}
+};
+
+/* ---------- MIDGARD : the clearing (and Surtr) ---------- */
+async function surtrEvent(){
+  const my=S.seq; S.locked=true;
+  await wait(1700); if (my!==S.seq) return;
+  S.w.burning=true; S.shake=1.2;
+  await say('Fire fills the clearing. The ground splits beneath you. Amidst the fire, you can make out two unfathomably large feet, with ankles rising into the clouds above you. You have released the fire giant Surtr. Midgard burns.','alert');
+  if (my!==S.seq) return;
+  await wait(1500); if (my!==S.seq) return;
+  die(null);
+}
+function giantFoot(x0,c1,c2,t){
+  for (let y=0;y<=13;y++){ put1(x0,y,'|',c1); put1(x0+11,y,'|',c1); for (let x=x0+1;x<x0+11;x++) if (hh(x,y+Math.floor(t*4))<0.35) put1(x,y,':',c2); else put1(x,y,'`',null); }
+  const shape=[[0,12,'/'],[ -1,13,'/'],[-2,14,'/'],[-3,15,'/'],[-4,16,'/']];
+  for (let i=0;i<7;i++){
+    const y=14+i, l=x0-Math.min(i,4), r=x0+11+i*2;
+    put1(l,y,'/',c1); put1(r,y, i===6?')':'\\',c1);
+    for (let x=l+1;x<r;x++) put1(x,y, hh(x,y+Math.floor(t*3))<0.3?':':'`', c2);
+  }
+  put(x0-4,F,'(',c1); for (let x=x0-3;x<x0+24;x++) put1(x,F,(x-x0)%3===0?'.':'_',c1); put1(x0+24,F,')',c1);
+}
+SC.mid_clearing = {
+  realm:'mid', title:'Midgard — The Clearing', floor:F, maxX:104,
+  exits:{ left:'mid_start', up:'asgard' }, zones:{ up:[95,104] },
+  desc(){ return 'You emerge from the thick forest into a vast open clearing. At the far end, there is a branch of Yggdrasil you could climb.'; },
+  enter(){ if (S.w.prison==='unlocked' || !S.inv.wisdom) surtrEvent(); },
+  update(dt){ if (S.w.burning) S.w.fire+=dt; },
+  draw(t){
+    put(14,2,'\\  |  /',M.y1); put(14,3,'-( O )-',M.y2); put(14,4,'/  |  \\',M.y1);
+    for (const x of [3,11,19,27]) pine(x,F-4,7+Math.floor(hh(x,2)*4),M.g1,M.dim,M.dim);
+    const bx=y=>99+Math.round(Math.pow((F-y)/F,2)*9);
+    for (let y=0;y<=F;y++){ const c=bx(y); put1(c-2,y,'(',M.g2); put(c-1,y,hh(y,4)<0.5?'|:|':':||',M.bark); put1(c+2,y,')',M.g2); }
+    for (const [lx,ly] of [[104,2],[96,5],[110,7],[100,10]]) for (let dx=-3;dx<=3;dx++) for (let dy=-1;dy<=1;dy++)
+      if (hh(lx+dx,ly+dy)<0.7) put1(lx+dx,ly+dy,pick('%&@*',hh(dx,dy+lx)),pick([M.g3,M.g4,M.p2],hh(dy,dx+ly)));
+    ground(()=>F,'"\',;"','.,\'`',M.g3,[M.g1,M.g2,M.dim]);
+    for (let x=30;x<95;x++){ const sw=Math.sin(x*0.4+t*2)>0.3; if (hh(x,61)<0.35) put1(x,F, sw?'/':'|', M.g2); if (hh(x,62)<0.05) put1(x,F,'*',M.p1); }
+    if (S.w.burning){
+      const ft=S.w.fire;
+      if (ft>1.2){ giantFoot(30,M.y1,M.p3,t); giantFoot(64,M.y1,M.p3,t); }
+      for (let x=0;x<COLS;x++){
+        const h=Math.max(0,Math.min(8, ft*5 - Math.abs(x-56)*0.12 + Math.sin(x*0.7+t*9)*2 + hh(x,Math.floor(t*12))*3));
+        for (let k=0;k<h;k++){
+          const y=F-k; if (hh(x,y+Math.floor(t*14))<0.42){
+            const r=k/Math.max(1,h);
+            put1(x,y, pick('^wWM()*\'',hh(x+k,Math.floor(t*10))), r<0.3?M.white:r<0.55?M.y2:r<0.8?M.y1:M.p1);
+          }
+        }
+      }
+      for (let x=0;x<COLS;x++){ const cy=F+2+Math.round(Math.sin(x*0.5)*1); if (Math.abs(x-56)<ft*14) put1(x,cy, x%2?'/':'\\', M.y1); }
+    }
+  },
+  front(t){ if (!S.w.burning) flakes(t,18,M.y1,M.y2,0.25,0.6,'.\''); else flakes(t,40,M.p1,M.y1,-3,0.5,'.\''); },
+  hots(){ return S.w.burning ? [] : [{x0:93,x1:111,y0:0,y1:F,label:'climb the branch',fn:()=>act('up')}]; },
+  choices(){ return S.w.burning || S.locked ? [] : [['climb up','up'],['go left','left']]; }
+};
+
+/* ---------- ASGARD ---------- */
+SC.asgard = {
+  realm:'asg', title:'Asgard', floor:F,
+  arrive:{ up:56 },
+  desc(){ return 'The Gods are impressed. Welcome to Asgard, brave warrior. You have achieved Redemption.'; },
+  enter(){ S.life=S.max; },
+  draw(t){
+    center(2,'redemption!',A.ink);
+    center(3,'congratulations, mighty warrior. you have reached Asgard.',A.l3);
+    for (let i=0;i<28;i++){
+      const a=-Math.PI*(i+0.5)/28, r0=5, r1=26+Math.sin(t*1.5+i)*3;
+      for (let r=r0;r<r1;r+=1.3){ const x=56+Math.cos(a)*r*2, y=F-2+Math.sin(a)*r*0.75; if (y>4) putE1(x,y, r>r1-4?'.':'\'', i%2?A.l1:A.l2); }
+    }
+    for (const x of [8,26,82,100]){
+      put(x,6,'_______',A.l3); put(x,7,'\\_____/',A.l3);
+      for (let y=8;y<F;y++) put(x+1,y,'|: :|',A.l2);
+      put(x,F,'[_____]',A.l3);
+    }
+    for (let x=0;x<COLS;x++) put1(x,F+1,'_',A.l3);
+    for (let y=F+2;y<ROWS;y++) for (let x=0;x<COLS;x++){ const n=vn(x*0.12+t*0.3,y*0.8); if (n>0.45) put1(x,y,n>0.7?'~':'-',n>0.6?A.l2:A.l1); }
+    if (Math.floor(t*2)%3===0) put1(56+Math.round(Math.sin(t)*10),8,'*',A.gold);
+  },
+  choices(){ return [['begin again','restart']]; }
+};
+
+/* ================================================================
+   COMBAT
+   ================================================================ */
+function mkFoe(x,hp,delay){ return { x, hp, face:-1, cd:0.9, atk:0, flash:0, rise:0, delay, sp:3.2+Math.random()*1.6, walk:Math.random(), kbv:0 }; }
+function combatTip(){
+  if (S.scene!=='hel_crypt' && S.scene!=='hel_shrine_out') return;
+  if (!weapon()) say('You have nothing to fight with. Flee!','sys');
+  else if (!S.w.tip){ S.w.tip=true; say('(Click the undead to strike them down, or press space.)','sys'); }
+}
+function hurtPlayer(n){
+  if (S.mode!=='play') return;
+  S.life=Math.max(0,S.life-n); S.shake=0.25; P.hurt=0.35; status(true);
+  if (S.life<=3 && S.life>0 && !S.w.lowWarn){ S.w.lowWarn=true; say('You are badly wounded.','alert'); }
+  if (S.life<=0) die('The undead drag you down into the frozen earth.');
+}
+function updFoes(dt){
+  const alive=S.foes.filter(f=>f.rise>=1);
+  const left=alive.filter(f=>f.x<P.x).sort((a,b)=>b.x-a.x), right=alive.filter(f=>f.x>=P.x).sort((a,b)=>a.x-b.x);
+  left.forEach((f,i)=>f.rank=i); right.forEach((f,i)=>f.rank=i);
+  for (const f of S.foes){
+    f.flash=Math.max(0,f.flash-dt); f.atk=Math.max(0,f.atk-dt);
+    if (f.rise<1){ if (f.delay>0) f.delay-=dt; else f.rise=Math.min(1,f.rise+dt*1.4); continue; }
+    if (f.kbv){ f.x=clamp(f.x+f.kbv*dt,2,COLS-3); f.kbv*=Math.pow(0.02,dt); if (Math.abs(f.kbv)<0.5) f.kbv=0; continue; }
+    const d=P.x-f.x; f.face=Math.sign(d)||1;
+    const want=2.7+(f.rank||0)*3.4;
+    if (Math.abs(d)>want){ f.x+=f.face*f.sp*dt; f.walk+=dt; }
+    if (Math.abs(d)<=3.2){ f.cd-=dt; if (f.cd<=0){ f.cd=1.15; f.atk=0.25; hurtPlayer(1); } }
+  }
+}
+function strike(f){
+  const w=weapon();
+  if (!w){ if (S.t-S.w.noWeaponWarn>3){ S.w.noWeaponWarn=S.t; say('You have nothing to fight with.','sys'); } return; }
+  if (P.cd>0) return;
+  P.cd=0.22; P.swing=0.18; P.face=Math.sign(f.x-P.x)||P.face;
+  f.hp-= w==='axe' ? 2 : 1; f.flash=0.15; f.kbv=P.face*16;
+  burst(f.x,floorAt(f.x)-1,[H.ice,H.white],5,'\'.*');
+  if (f.hp<=0){
+    S.foes=S.foes.filter(o=>o!==f);
+    burst(f.x,floorAt(f.x)-1,[H.undead,H.undeadHead,H.stone],16,'#O/\\.,');
+    if (!S.foes.length && S.combat){ S.combat=false; const cb=S.onClear; S.onClear=null; cb&&cb(); }
+  }
+}
+function attackNearest(){
+  const fs=S.foes.filter(f=>f.rise>=1);
+  if (!fs.length) return say('There is nothing here to fight.','sys');
+  fs.sort((a,b)=>Math.abs(a.x-P.x)-Math.abs(b.x-P.x));
+  engage(fs[0]);
+}
+function engage(f){
+  if (Math.abs(f.x-P.x)<=5.5) strike(f);
+  else { const s=Math.sign(f.x-P.x); walkTo(f.x-s*3); P.pend=f; }
+}
+
+/* ================================================================
+   MOVEMENT + FLOW
+   ================================================================ */
+function walkTo(x,cb){ const sc=SC[S.scene]; P.tx=clamp(x,minX(sc),maxX(sc)); P.cb=cb||null; P.pend=null; }
+function walkP(x){ return new Promise(r=>walkTo(x,r)); }
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+function updatePlayer(dt){
+  const sc=SC[S.scene];
+  P.cd-=dt; P.swing-=dt; P.hurt-=dt;
+  if (P.climb){
+    P.climb.t+=dt; P.yo=(P.climb.dir==='up'?-1:1)*P.climb.t*10;
+    if (P.climb.t>0.7){ const d=P.climb.dir; P.climb=null; go(sc.exits[d],d); }
+    return;
+  }
+  if (P.yo){ const s=Math.sign(P.yo); P.yo-=s*dt*10; if (Math.sign(P.yo)!==s) P.yo=0; }
+  let dir=0;
+  if (!S.locked){ if (keys.left) dir=-1; else if (keys.right) dir=1; }
+  let fromKeys=!!dir;
+  if (!dir && P.tx!=null){
+    const d=P.tx-P.x;
+    if (Math.abs(d)<0.25){ P.x=P.tx; P.tx=null; const cb=P.cb; P.cb=null; cb&&cb(); }
+    else dir=Math.sign(d);
+  }
+  if (P.pend){
+    if (!S.foes.includes(P.pend)) P.pend=null;
+    else if (Math.abs(P.pend.x-P.x)<=5.5){ const f=P.pend; P.pend=null; P.tx=null; strike(f); dir=0; }
+  }
+  if (dir){
+    P.face=dir; P.walk+=dt;
+    let nx=P.x+dir*16*P.speed*dt;
+    if (P.tx!=null && !fromKeys) nx = dir>0 ? Math.min(nx,P.tx) : Math.max(nx,P.tx);
+    const lo=minX(sc), hi=maxX(sc);
+    const here=S.scene;
+    if (nx<lo){ nx=lo; if (fromKeys) tryExit('left'); }
+    if (nx>hi){ nx=hi; if (fromKeys) tryExit('right'); }
+    if (S.scene!==here || S.mode!=='play') return;   // we changed area: keep the new arrival position
+    P.moving = Math.abs(nx-P.x)>0.001; P.x=nx;
+  } else P.moving=false;
+}
+function tryExit(dir){
+  if (S.trans || S.bumpT>0) return;
+  const sc=SC[S.scene];
+  if (!sc.exits || !sc.exits[dir]) return;
+  if (sc.canExit && !sc.canExit(dir)){ S.bumpT=1.4; return; }
+  go(sc.exits[dir],dir);
+}
+function startClimb(dir){ P.tx=null; P.climb={dir,t:0}; }
+
+function act(v,arg){
+  if (S.mode!=='play' || S.locked || P.climb) return;
+  const sc=SC[S.scene];
+  if (sc.on && sc.on[v]) return sc.on[v](arg);
+  switch(v){
+    case 'left': case 'right':
+      if (!sc.exits || !sc.exits[v]) return say('You can\u2019t go that way.','sys');
+      return walkTo(v==='left'?minX(sc):maxX(sc),()=>{ S.bumpT=0; tryExit(v); });
+    case 'up': case 'down': {
+      const z=sc.zones && sc.zones[v];
+      if (!z || !sc.exits || !sc.exits[v]) return say(v==='up'?'There is nothing to climb here.':'There is no way down here.','sys');
+      if (sc.canExit && !sc.canExit(v)) return;
+      const inZone=P.x>=z[0]&&P.x<=z[1];
+      return walkTo(inZone?P.x:(z[0]+z[1])/2,()=>startClimb(v));
+    }
+    case 'take': return say('There is nothing here to take.','sys');
+    case 'open': return say('There is nothing here to open.','sys');
+    case 'use':
+      if (!arg) return say('Use what?','sys');
+      if (!S.inv[arg]) return say('You don\u2019t have that.','sys');
+      return say('That does nothing here.','sys');
+    case 'attack': return attackNearest();
+    case 'look': return say(sc.desc());
+    case 'inv': return say(invList().length ? 'You carry: '+invList().join(', ')+'.' : 'Your hands are empty.');
+  }
+}
+
+function go(id,dir,opts={}){
+  S.seq++; S.trans=true;
+  if (opts.flush!==false) flushText();
+  const prevRealm=S.realm, sc=SC[id];
+  S.scene=id; S.foes=[]; S.wander=[]; S.combat=false; S.onClear=null; S.locked=false; S.parts=[];
+  P.tx=null; P.cb=null; P.pend=null; P.climb=null; P.speed=1; keys.left=keys.right=false;
+  const A=sc.arrive||{}; let ax;
+  if (A[dir]!=null) ax=A[dir];
+  else if (dir==='left') ax=maxX(sc)-1;
+  else if (dir==='right') ax=minX(sc)+1;
+  else if (dir==='up' && sc.zones && sc.zones.down) ax=(sc.zones.down[0]+sc.zones.down[1])/2;
+  else if (dir==='down' && sc.zones && sc.zones.up) ax=(sc.zones.up[0]+sc.zones.up[1])/2;
+  else ax=A.start ?? 30;
+  P.x=ax; P.yo = dir==='up' ? 5 : dir==='down' ? -6 : 0;
+  if (dir==='left') P.face=-1; else if (dir==='right') P.face=1;
+  setRealm(sc.realm);
+  if (prevRealm==='hel' && sc.realm==='mid') S.life=S.max;
+  S.fade=1;
+  say(sc.title,'room');
+  say(sc.desc(), sc.realm==='asg'?'big':'');
+  sc.enter && sc.enter(dir);
+  S.trans=false;
+  refresh();
+}
+
+function die(msg){
+  if (S.mode==='dead') return;
+  S.seq++; S.mode='dead'; S.deaths++; S.deadT=0;
+  S.combat=false; S.foes=[]; S.locked=false; S.parts=[]; keys.left=keys.right=false;
+  flushText();
+  if (msg) say(msg,'alert');
+  setRealm('hel');
+  say('You have died.','big');
+  refresh();
+}
+function newGame(fromDeath){
+  S.mode='play'; S.inv={tyrfing:false,axe:false,wisdom:false}; S.w=freshWorld(); S.life=S.max;
+  P.face=1;
+  flushText();
+  if (fromDeath){ S.banner={text:'find redemption.',t:0}; say('find redemption.','big'); }
+  else say('Greetings, lost soul. The Gods may have forsaken you, but there is still a chance for Redemption. Asgard awaits you yet.','big');
+  go('hel_start','start',{flush:false});
+}
+
+/* ================================================================
+   TEXT LOG
+   ================================================================ */
+const logEl=document.getElementById('log'), choicesEl=document.getElementById('choices'), inEl=document.getElementById('in');
+const queue=[]; let typing=null;
+function say(text,cls){ return new Promise(res=>{ queue.push({text,cls,res}); pump(); }); }
+function addNow(text,cls){ const p=document.createElement('p'); p.className=cls||''; p.textContent=text; logEl.appendChild(p); trim(); logEl.scrollTop=logEl.scrollHeight; }
+function trim(){
+  const ps=logEl.querySelectorAll('p');
+  ps.forEach((p,i)=>{ if (i<ps.length-6) p.classList.add('old'); });
+  while (logEl.children.length>80) logEl.removeChild(logEl.firstChild);
+}
+function pump(){
+  if (typing) return;
+  if (!queue.length){ renderChoices(); return; }
+  choicesEl.style.visibility='hidden';
+  const it=queue.shift(); const p=document.createElement('p'); p.className=it.cls||''; logEl.appendChild(p); trim();
+  typing={it,p,skip:false}; let i=0;
+  const step=()=>{
+    if (!typing || typing.p!==p) return;
+    i = typing.skip ? it.text.length : i+2;
+    p.textContent=it.text.slice(0,i); logEl.scrollTop=logEl.scrollHeight;
+    if (i>=it.text.length){ typing=null; it.res(); pump(); }
+    else setTimeout(step, it.cls==='room'?25:40);
+  };
+  step();
+}
+function skipText(){ if (typing) typing.skip=true; }
+function flushText(){
+  if (typing){ typing.p.textContent=typing.it.text; const r=typing.it.res; typing=null; r(); }
+  while (queue.length){ const it=queue.shift(); addNow(it.text,it.cls); it.res(); }
+}
+logEl.addEventListener('click',skipText);
+
+function currentChoices(){
+  if (S.mode==='title') return [['P = Play game','play'],['I = Instructions','instr']];
+  if (S.mode==='dead') return [];
+  const sc=SC[S.scene];
+  if (S.locked && !S.w.burning) return [];
+  return sc.choices ? sc.choices() : [];
+}
+function renderChoices(){
+  choicesEl.innerHTML=''; choicesEl.style.visibility='visible';
+  for (const [label,key] of currentChoices()){
+    const b=document.createElement('button'); b.type='button'; b.textContent='['+label+']';
+    b.addEventListener('click',()=>{ addNow('> '+label,'you'); dispatch(key); inEl.focus({preventScroll:true}); });
+    choicesEl.appendChild(b);
+  }
+}
+function dispatch(key){
+  if (key==='play') return newGame(false);
+  if (key==='instr') return instructions();
+  if (key==='redeem') return newGame(true);
+  if (key==='restart'){ S.mode='title'; setRealm('hel'); flushText(); refresh(); return say('Enter one of the above.','sys'); }
+  if (key==='death') return die(null);
+  if (key.startsWith('use:')) return act('use',key.slice(4));
+  act(key);
+}
+function instructions(){
+  say('Walk with the arrow keys \u2190 \u2192 and climb with \u2191 \u2193. Click anywhere in the scene to walk there, click objects to take them, and click the undead to strike them (space also strikes).');
+  say('Or play it the old way: click a [choice], or type commands \u2014 go left, take sword, climb up, open chest, use axe, look, inventory.');
+}
+
+/* command parser */
+function itemOf(s){ if (/tyrfing|sword/.test(s)) return 'tyrfing'; if (/axe|forseti/.test(s)) return 'axe'; if (/wisdom|odin|eye/.test(s)) return 'wisdom'; return null; }
+function parse(raw){
+  const s=raw.trim().toLowerCase().replace(/[.!?,]/g,'').replace(/\s+/g,' ');
+  if (!s) return;
+  addNow('> '+raw.trim(),'you');
+  if (S.mode==='title'){
+    if (/^(p|play|play game|start)$/.test(s)) return newGame(false);
+    if (/^(i|instructions|help|\?)$/.test(s)) return instructions();
+    return say('Enter one of the above.','sys');
+  }
+  if (S.mode==='dead'){
+    if (/redemption|find|again|continue|descend|yes|^y$|^go/.test(s)) return newGame(true);
+    return say('Only one path remains: find redemption.','sys');
+  }
+  if (S.w.burning){ if (/death|die|continue|ok|yes/.test(s)) return die(null); return say('Fire surrounds you. There is nowhere to go.','sys'); }
+  if (S.locked) return say('You cannot move.','sys');
+  if (/^(help|\?|h)$/.test(s)) return instructions();
+  if (S.scene==='asgard' && /again|restart|play|begin/.test(s)) return dispatch('restart');
+  const m=s.replace(/^(go|walk|move|run|head|travel|climb|step) ?(to )?(the )?/,'').trim();
+  const verbOnly = s.split(' ')[0];
+  if (/^(left|west|w)$/.test(m)) return act('left');
+  if (/^(right|east|e)$/.test(m)) return act('right');
+  if (/^(up|u|ascend|upwards)\b/.test(m) || (verbOnly==='climb' && !/down/.test(s))) return act('up');
+  if (/^(down|d|descend|downwards)\b/.test(m) || /^climb down/.test(s)) return act('down');
+  if (/^(take|get|grab|pick|pickup|collect)\b/.test(s)) return act('take');
+  if (/^open\b/.test(s)) return act('open');
+  if (/^(use|swing|wield)\b/.test(s)) return act('use',itemOf(s));
+  if (/^cut\b/.test(s)) return act('use', itemOf(s) || weapon());
+  if (/^(attack|strike|kill|fight|hit|slash)\b/.test(s)) return act('attack');
+  if (/^(look|l|examine|x)\b/.test(s)) return act('look');
+  if (/^(i|inv|inventory)$/.test(s)) return act('inv');
+  say('I don\u2019t know how to "'+raw.trim()+'".','sys');
+}
+document.getElementById('cmd').addEventListener('submit',e=>{ e.preventDefault(); const v=inEl.value; inEl.value=''; if (!v.trim()) return skipText(); parse(v); });
+
+/* ================================================================
+   STATUS BAR
+   ================================================================ */
+const invEl=document.getElementById('inv'), realmEl=document.getElementById('realm'), lifeEl=document.getElementById('life');
+function invList(){ const a=[]; if (S.inv.tyrfing) a.push('Tyrfing'); if (S.inv.axe) a.push('Forseti\u2019s Golden Axe'); if (S.inv.wisdom) a.push('Odin\u2019s Wisdom'); return a; }
+function status(hit){
+  const items=invList();
+  invEl.innerHTML='<span class="k">Q:[</span>Inventory<span class="k">]-&gt;</span><b>'+(items.length?items.join(' \u00b7 '):'Free hands')+'</b>';
+  realmEl.textContent = S.mode==='title' ? 'REDEMPTION' : S.mode==='dead' ? 'HEL' : SC[S.scene].title.toUpperCase();
+  lifeEl.innerHTML='<span class="k">LIFE:</span><b>'+'#'.repeat(S.life)+'</b><span class="k">'+'-'.repeat(S.max-S.life)+'*</span>';
+  if (hit){ lifeEl.classList.add('hit'); setTimeout(()=>lifeEl.classList.remove('hit'),180); }
+}
+function setRealm(r){ S.realm=r; document.body.className=r; }
+function refresh(){ status(); if (!typing && !queue.length) renderChoices(); }
+
+/* ================================================================
+   TITLE + DEATH SCREENS
+   ================================================================ */
+function drawTitle(t){
+  const rc=[H.white,H.white,H.pale,H.ice,H.blue2,H.blue];
+  bigWord('REDEMPTION',12,3,r=>rc[r]);
+  put(12,11,'(c) a tale of the Nine Realms',H.stone2);
+  put(12,12,'Hel . Midgard . Asgard',H.stone);
+  put(64,11,'Version: 1.0',H.stone2);
+  put(64,12,'Left = <  Right = >  Climb = ^ v',H.stone2);
+  put(64,13,'Strike = click or space',H.stone2);
+  put(12,16,'P = Play game',H.pale);
+  put(12,17,'I = Instructions',H.pale);
+  put(64,16,'Souls lost',H.pale);
+  put(64,17,String(S.deaths).padStart(2,'0'),H.stone2);
+  put(12,20,'Enter one of the above: '+(Math.floor(t*2)%2?'_':''),H.pale);
+  flakes(t,40,H.stone2,H.fog2);
+  fog(22,ROWS-1,0.55,H.dim,H.fog,t,1);
+}
+function drawDeath(t){
+  flakes(t,70,H.stone,H.fog2,3,0.4);
+  for (let x=0;x<COLS;x++) put1(x,ROWS-3,'_',H.fog);
+  fog(ROWS-6,ROWS-1,0.5,H.dim,H.fog,t,0.6);
+  center(10,'y o u   h a v e   d i e d',H.white);
+  if (S.deadT>1.2) center(14,'find redemption.', Math.sin(t*2)>0?H.blue2:H.ice);
+}
+function drawBanner(){
+  const b=S.banner; if (!b) return;
+  const c = b.t<4 ? H.white : b.t<5.5 ? H.stone2 : b.t<7 ? H.fog2 : null;
+  if (!c){ S.banner=null; return; }
+  center(5,'find redemption.',c);
+}
+
+/* ================================================================
+   RENDERING
+   ================================================================ */
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const base=document.createElement('canvas'), bctx=base.getContext('2d');
+const dc=document.createElement('canvas'), dctx=dc.getContext('2d');
+let ratio=0.45, cw=8, rh=16, fs=16, dpr=1, W=0, Hh=0, glowOK=false;
+
+function measure(){
+  bctx.font='100px '+FONT; ratio=bctx.measureText('M').width/100 || 0.45;
+  try { ctx.filter='blur(2px)'; glowOK = ctx.filter==='blur(2px)'; ctx.filter='none'; } catch(e){ glowOK=false; }
+}
+function resize(){
+  const avW=Math.min(window.innerWidth-32,1168), avH=Math.max(220,window.innerHeight-300);
+  fs=Math.max(7,Math.min(avW/(COLS*ratio),avH/ROWS)); fs=Math.floor(fs*2)/2;
+  cw=fs*ratio; rh=fs; W=Math.round(COLS*cw); Hh=Math.round(ROWS*rh);
+  dpr=Math.min(2,window.devicePixelRatio||1);
+  for (const c of [cv,base,dc]){ c.width=Math.round(W*dpr); c.height=Math.round(Hh*dpr); }
+  cv.style.width=W+'px'; cv.style.height=Hh+'px';
+}
+function paint(){
+  const g=bctx, pl=pal();
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.fillStyle=pl.bg; g.fillRect(0,0,W,Hh);
+  g.font=fs+'px '+FONT; g.textBaseline='middle';
+  for (let y=0;y<ROWS;y++){
+    let run='', rc=null, rx=0;
+    const flush=()=>{ if (run){ g.fillStyle=rc; g.fillText(run,rx*cw,(y+0.55)*rh); } run=''; };
+    for (let x=0;x<COLS;x++){
+      const k=y*COLS+x, ch=BCH[k];
+      if (!ch || ch===' '){ flush(); rc=null; continue; }
+      const c=BCO[k];
+      if (c!==rc || !run){ flush(); rc=c; rx=x; }
+      run+=ch;
+    }
+    flush();
+  }
+  // darkness and the light of Tyrfing
+  if (S.mode==='play'){
+    const sc=SC[S.scene], d=sc.dark && sc.dark();
+    if (d){
+      const q=dctx; q.setTransform(1,0,0,1,0,0); q.globalCompositeOperation='source-over'; q.clearRect(0,0,dc.width,dc.height);
+      if (d.grad){ const lg=q.createLinearGradient(0,0,dc.width,0); lg.addColorStop(0,'rgba(0,0,0,'+d.grad[0]+')'); lg.addColorStop(1,'rgba(0,0,0,'+d.grad[1]+')'); q.fillStyle=lg; }
+      else q.fillStyle='rgba(0,0,0,'+d.base+')';
+      q.fillRect(0,0,dc.width,dc.height);
+      q.globalCompositeOperation='destination-out';
+      const L=[...(d.lights||[])];
+      if (S.inv.tyrfing) L.push([P.x,floorAt(P.x)+P.yo-1,17+Math.sin(S.t*3)*1.2]);
+      for (const [lx,ly,lr] of L){
+        const X=(lx+0.5)*cw*dpr, Y=(ly+0.5)*rh*dpr, R=lr*cw*dpr;
+        const rg=q.createRadialGradient(X,Y,0,X,Y,R); rg.addColorStop(0,'rgba(0,0,0,1)'); rg.addColorStop(1,'rgba(0,0,0,0)');
+        q.fillStyle=rg; q.fillRect(X-R,Y-R,R*2,R*2);
+      }
+      q.globalCompositeOperation='source-over';
+      g.setTransform(1,0,0,1,0,0); g.drawImage(dc,0,0);
+    }
+  }
+  // composite with phosphor glow
+  ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle=pl.bg; ctx.fillRect(0,0,cv.width,cv.height);
+  const sx = S.shake>0 ? (Math.random()-0.5)*S.shake*14*dpr : 0, sy = S.shake>0 ? (Math.random()-0.5)*S.shake*8*dpr : 0;
+  ctx.drawImage(base,sx,sy);
+  if (glowOK && S.realm!=='asg'){
+    ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.5; ctx.filter='blur('+Math.max(2,cw*0.55*dpr)+'px)';
+    ctx.drawImage(base,sx,sy);
+    ctx.filter='none'; ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+  }
+  if (S.flash>0){ ctx.fillStyle='rgba(255,255,255,'+Math.min(1,S.flash)*0.85+')'; ctx.fillRect(0,0,cv.width,cv.height); }
+  if (S.fade>0){ ctx.globalAlpha=Math.min(1,S.fade); ctx.fillStyle=pl.bg; ctx.fillRect(0,0,cv.width,cv.height); ctx.globalAlpha=1; }
+}
+function render(){
+  clr();
+  if (S.mode==='title') drawTitle(S.t);
+  else if (S.mode==='dead') drawDeath(S.t);
+  else {
+    const sc=SC[S.scene];
+    sc.draw(S.t); drawWander(); drawFoes(); drawPlayer(); drawParts();
+    sc.front && sc.front(S.t);
+    drawBanner();
+  }
+  paint();
+}
+function update(dt){
+  S.t+=dt;
+  if (S.mode==='play'){ const sc=SC[S.scene]; updatePlayer(dt); updFoes(dt); sc.update && sc.update(dt); }
+  if (S.mode==='dead'){ S.deadT+=dt; if (S.deadT>5 && !typing && !queue.length) newGame(true); }
+  if (S.banner) S.banner.t+=dt;
+  for (const p of S.parts){ p.vy+=22*dt; p.x+=p.vx*dt; p.y+=p.vy*dt*0.5; p.life-=dt; }
+  S.parts=S.parts.filter(p=>p.life>0);
+  S.shake=Math.max(0,S.shake-dt); S.flash=Math.max(0,S.flash-dt*0.7); S.fade=Math.max(0,S.fade-dt*2.4); S.bumpT=Math.max(0,S.bumpT-dt);
+}
+let last=performance.now(), acc=0;
+function frame(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  update(dt); acc+=dt;
+  if (acc>=1/40){ acc=0; render(); }
+  requestAnimationFrame(frame);
+}
+
+/* ================================================================
+   INPUT
+   ================================================================ */
+const keys={left:false,right:false};
+function cellOf(e){ const r=cv.getBoundingClientRect(); return [Math.floor((e.clientX-r.left)/cw), Math.floor((e.clientY-r.top)/rh)]; }
+function foeAt(cx,cy){ return S.foes.find(f=>{ const fy=floorAt(f.x); return cx>=Math.round(f.x)-2 && cx<=Math.round(f.x)+2 && cy>=fy-3 && cy<=fy+1 && f.rise>=1; }); }
+function hotAt(cx,cy){ const sc=SC[S.scene]; return (sc.hots?sc.hots():[]).find(h=>cx>=h.x0&&cx<=h.x1&&cy>=h.y0&&cy<=h.y1); }
+cv.addEventListener('click',e=>{
+  inEl.focus({preventScroll:true});
+  if (S.mode==='dead'){ if (S.deadT>1.2){ addNow('> find redemption','you'); newGame(true); } return; }
+  if (S.mode==='play' && S.w.burning && !typing && !queue.length) return die(null);
+  if (S.mode!=='play' || S.locked || P.climb) return;
+  const [cx,cy]=cellOf(e), sc=SC[S.scene];
+  const f=foeAt(cx,cy); if (f) return engage(f);
+  const h=hotAt(cx,cy); if (h) return h.fn();
+  if (sc.exits && sc.exits.left && cx<=minX(sc)+1) return act('left');
+  if (sc.exits && sc.exits.right && cx>=maxX(sc)-1) return act('right');
+  walkTo(cx);
+});
+const hoverEl=document.getElementById('hover');
+cv.addEventListener('mousemove',e=>{
+  let label='';
+  if (S.mode==='play' && !S.locked){
+    const [cx,cy]=cellOf(e), sc=SC[S.scene];
+    if (foeAt(cx,cy)) label='strike';
+    else { const h=hotAt(cx,cy); if (h) label=h.label;
+      else if (sc.exits && sc.exits.left && cx<=minX(sc)+1) label='go left';
+      else if (sc.exits && sc.exits.right && cx>=maxX(sc)-1) label='go right'; }
+  } else if (S.mode==='dead' && S.deadT>1.2) label='find redemption';
+  hoverEl.textContent = label ? '\u203a '+label : '';
+  cv.style.cursor = label ? 'pointer' : 'crosshair';
+});
+cv.addEventListener('mouseleave',()=>{ hoverEl.textContent=''; });
+
+addEventListener('keydown',e=>{
+  const inp=document.activeElement===inEl, hasText=inEl.value.length>0;
+  if (e.key==='ArrowLeft'||e.key==='ArrowRight'){
+    if (inp&&hasText) return; e.preventDefault();
+    if (S.mode==='play' && !S.locked && !P.climb){ keys[e.key==='ArrowLeft'?'left':'right']=true; P.tx=null; P.cb=null; P.pend=null; }
+    return;
+  }
+  if (e.key==='ArrowUp'||e.key==='ArrowDown'){
+    if (inp&&hasText) return; e.preventDefault();
+    if (!e.repeat) act(e.key==='ArrowUp'?'up':'down'); return;
+  }
+  if ((e.key===' '||e.key==='Enter') && !hasText && S.mode==='dead' && S.deadT>1.2 && !typing && !queue.length){ e.preventDefault(); addNow('> find redemption','you'); return newGame(true); }
+  if (e.key===' ' && !hasText){ e.preventDefault(); if (S.mode==='play' && S.foes.length) act('attack'); else skipText(); return; }
+  if (S.mode==='title' && !hasText && /^[pPiI]$/.test(e.key) && !e.metaKey && !e.ctrlKey){
+    e.preventDefault(); addNow('> '+e.key.toUpperCase(),'you'); return dispatch(/p/i.test(e.key)?'play':'instr');
+  }
+  if (!inp && e.key.length===1 && !e.metaKey && !e.ctrlKey && !e.altKey) inEl.focus({preventScroll:true});
+});
+addEventListener('keyup',e=>{ if (e.key==='ArrowLeft') keys.left=false; if (e.key==='ArrowRight') keys.right=false; });
+addEventListener('blur',()=>{ keys.left=keys.right=false; });
+addEventListener('resize',resize);
+
+/* ================================================================
+   BOOT
+   ================================================================ */
+async function boot(){
+  try { await Promise.race([document.fonts.load('20px VT323'), wait(2500)]); } catch(e){}
+  measure(); resize(); status(); renderChoices();
+  say('Enter one of the above.','sys');
+  requestAnimationFrame(frame);
+  inEl.focus({preventScroll:true});
+}
+window.__game = { S, P, SC, act, go, parse, dispatch };
+boot();
+})();
+</script>
+</body>
+</html>
